@@ -171,8 +171,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
       for i in range(len(Hvs)):
         alphas.append( _dot(curr_residuals[i], curr_residuals[i]) / _dot(curr_dirs[i], Hvs[i]) )
 
-      curr_deltas = []
-      curr_deltas.append([d * a for d,a in list(zip(curr_dirs,alphas))])
+      curr_deltas = [d * a for d,a in list(zip(curr_dirs,alphas))]
       deltas = [ d1 + d0 for d0,d1 in list(zip(curr_deltas, deltas)) ]
       deltas_history.append(curr_deltas)
       residuals_history.append(curr_residuals)
