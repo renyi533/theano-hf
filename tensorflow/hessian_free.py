@@ -4,6 +4,7 @@ from __future__ import print_function
 
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import gen_math_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import gradients
 from tensorflow.python.ops import resource_variable_ops
@@ -11,6 +12,7 @@ from tensorflow.python.training import optimizer
 from tensorflow.python.training import training_ops
 from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.ops import gen_array_ops
 from tensorflow.python.ops import resource_variable_ops
 from tensorflow.python.ops import state_ops
 from tensorflow.python.ops import variables
@@ -64,13 +66,20 @@ def _hessian_vector_product(ys, xs, v):
 def _dot(t0, t1):
   return math_ops.reduce_sum(math_ops.multiply(t0, t1))
 
+def _Hv( loss, variables, v, damping):
+  Hvs = _hessian_vector_product(loss, variables, v)
+  if damping > 0:
+    for k in range(len(Hvs)):
+      Hvs[k] = Hvs[k] + damping * v[k]
+  return Hvs
+
 class HessianFreeOptimizer(optimizer.Optimizer):
   """Optimizer that implements the gradient descent algorithm.
   """
   GATE_NONE = 0
   GATE_OP = 1
   GATE_GRAPH = 2
-  def __init__(self, cg_iter, learning_rate=1.0, use_locking=False, name="HessianFree"):
+  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False, use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
       learning_rate: A Tensor or a floating point value.  The learning
@@ -82,19 +91,21 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     super(HessianFreeOptimizer, self).__init__(use_locking, name)
     self._cg_iter = cg_iter
     self._learning_rate = learning_rate
+    self._damping = damping
+    self._fix_first_step = fix_first_step
 
   def _apply_dense(self, grad, var):
     return training_ops.apply_gradient_descent(
         var,
         math_ops.cast(self._learning_rate_tensor, var.dtype.base_dtype),
-        grad,
+        -grad,
         use_locking=self._use_locking).op
 
   def _resource_apply_dense(self, grad, handle):
     return training_ops.resource_apply_gradient_descent(
         handle.handle, math_ops.cast(self._learning_rate_tensor,
                                      grad.dtype.base_dtype),
-        grad, use_locking=self._use_locking)
+        -grad, use_locking=self._use_locking)
 
   def _prepare(self):
     self._cg_iter_tensor = ops.convert_to_tensor(self._cg_iter,
@@ -145,41 +156,59 @@ class HessianFreeOptimizer(optimizer.Optimizer):
           " that do not support gradients, between variables %s and loss %s." %
           ([str(v) for _, v in grads_and_vars], loss))
 
-    valid_grads = [g for g, v in grads_and_vars if g is not None]
+    valid_grads = [-g for g, v in grads_and_vars if g is not None]
 
     valid_vars_with_grad = list(zip(valid_grads, vars_with_grad))
 
-    valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, valid_vars_with_grad, self._cg_iter)
+    valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, valid_vars_with_grad, self._cg_iter, self._fix_first_step)
 
     return self.apply_gradients(valid_vars_with_grad, global_step=global_step,
                                 name=name)
 
-  def _conjugate_gradient(self, loss, grads_and_vars, cg_iter):
-    curr_dirs = [-g for g,v in grads_and_vars]
-    curr_residuals = [-g for g,v in grads_and_vars]
+  def _conjugate_gradient(self, loss, grads_and_vars, cg_iter, fix_first_step=False, init_deltas=None):
+    minus_gradient = [g for g,v in grads_and_vars]
     variables = [v for g,v in grads_and_vars]
+
+    H_vars = [array_ops.zeros_like(g) for g in minus_gradient]
+    if init_deltas is not None:
+      H_vars = _Hv(loss, variables, init_deltas, self._damping)
+
+    curr_dirs = [g - b for g,b in list(zip(minus_gradient, H_vars))]
+    curr_residuals = [g - b for g,b in list(zip(minus_gradient, H_vars))]
     deltas = [ array_ops.zeros_like(g) for g in curr_dirs ]
+
     deltas_history = []
     residuals_history = []
-
+    first_alpha = 1
     for i in range(cg_iter):
-      Hvs = _hessian_vector_product(loss, variables, curr_dirs)
+      Hvs = _Hv(loss, variables, curr_dirs, self._damping)
+
       if len(Hvs) != len(variables):
         raise ValueError("xs and Hvs must have the same length.")
-      alphas = []
 
-      for i in range(len(Hvs)):
-        alphas.append( _dot(curr_residuals[i], curr_residuals[i]) / _dot(curr_dirs[i], Hvs[i]) )
+      curr_residuals_flatten = [gen_array_ops.reshape(v, [-1]) for v in curr_residuals]
+      curr_dirs_flatten = [gen_array_ops.reshape(v, [-1]) for v in curr_dirs]
+      Hvs_flatten = [gen_array_ops.reshape(v, [-1]) for v in Hvs]
 
-      curr_deltas = [d * a for d,a in list(zip(curr_dirs,alphas))]
+      curr_residuals_concat = array_ops.concat(curr_residuals_flatten, 0)
+      curr_dirs_concat = array_ops.concat(curr_dirs_flatten, 0)
+      Hvs_concat = array_ops.concat(Hvs_flatten, 0)
+      alpha = _dot(curr_residuals_concat, curr_residuals_concat) / _dot(curr_dirs_concat, Hvs_concat)
+      alpha = gen_math_ops.maximum(alpha, 1e-6)
+      if i == 1 and fix_first_step:
+        first_alpha = alpha
+      curr_deltas = [d * alpha / first_alpha for d in curr_dirs]
       deltas = [ d1 + d0 for d0,d1 in list(zip(curr_deltas, deltas)) ]
       deltas_history.append(curr_deltas)
       residuals_history.append(curr_residuals)
-      new_residuals = [r - a * v for r,a,v in list(zip(curr_residuals, alphas, Hvs))]
-      betas =[]
-      for i in range(len(curr_residuals)):
-        betas.append( _dot(new_residuals[i], new_residuals[i]) / _dot(curr_residuals[i], curr_residuals[i]) )
-      new_dirs = [r + b * d for r,b,d in list(zip(new_residuals, betas, curr_dirs))]
+      new_residuals = [r - alpha * v for r,v in list(zip(curr_residuals, Hvs))]
+      new_residuals_flatten = [gen_array_ops.reshape(v, [-1]) for v in new_residuals]
+      new_residuals_concat = array_ops.concat(new_residuals_flatten, 0)
+
+
+      beta = _dot(new_residuals_concat, new_residuals_concat) / _dot(curr_residuals_concat, curr_residuals_concat)
+      #beta = gen_math_ops.maximum(beta, 1e-4)
+      new_dirs = [r + beta * d for r,d in list(zip(new_residuals, curr_dirs))]
       curr_dirs = new_dirs
       curr_residuals = new_residuals
 
