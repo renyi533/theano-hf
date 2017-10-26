@@ -18,6 +18,48 @@ from tensorflow.python.ops import state_ops
 from tensorflow.python.ops import variables
 from tensorflow.python.training import slot_creator
 from tensorflow.python.ops import tensor_array_ops
+#from tensorflow_forward_ad.second_order import hessian_vec_fw
+#from tensorflow_forward_ad.second_order import gauss_newton_vec
+
+def _Lop(f, x, v):
+  assert not isinstance(f, list) or isinstance(v, list), "f and v should be of the same type"
+  if isinstance(x, list):
+    return gradients.gradients(f, x, grad_ys=v)
+  else:
+    return gradients.gradients(f, x, grad_ys=v)[0]
+
+def _Rop(f, x, v):
+  assert not isinstance(x, list) or isinstance(v, list), "x and v should be of the same type"
+  if isinstance(f, list):
+    w = [array_ops.ones_like(_) for _ in f]
+    return gradients.gradients(_Lop(f, x, w), w, grad_ys=v)
+  else:
+    w = array_ops.ones_like(f)
+    return gradients.gradients(_Lop(f, x, w), w, grad_ys=v)[0]
+
+def _gauss_newton_vec(ys, zs, xs, vs):
+  """Implements Gauss-Newton vector product.
+  Args:
+    ys: Loss function.
+    zs: Before output layer (input to softmax).
+    xs: Weights, list of tensors.
+    vs: List of perturbation vector for each weight tensor.
+  Returns:
+    J'HJv: Guass-Newton vector product.
+  """
+  # Validate the input
+  if type(xs) == list:
+    if len(vs) != len(xs):
+      raise ValueError("xs and vs must have the same length.")
+
+  grads_z = gradients.gradients(ys, zs, gate_gradients=True)
+
+  #logic with Rop
+  #hjv = forward_gradients(grads_z, xs, vs, gate_gradients=True)
+  hjv = _Rop(grads_z, xs, vs)
+
+  jhjv = gradients.gradients(zs, xs, hjv, gate_gradients=True)
+  return jhjv, hjv
 
 def _hessian_vector_product(ys, xs, v):
   """Multiply the Hessian of `ys` wrt `xs` by `v`.
@@ -66,12 +108,19 @@ def _hessian_vector_product(ys, xs, v):
 def _dot(t0, t1):
   return math_ops.reduce_sum(math_ops.multiply(t0, t1))
 
-def _Hv( loss, variables, v, damping):
+def Hv( loss, z, variables, v, damping):
   Hvs = _hessian_vector_product(loss, variables, v)
   if damping > 0:
     for k in range(len(Hvs)):
       Hvs[k] = Hvs[k] + damping * v[k]
   return Hvs
+
+def Gv( loss, z, variables, v, damping):
+  Gvs = _gauss_newton_vec(loss, z, variables, v)[0]
+  if damping > 0:
+    for k in range(len(Gvs)):
+      Gvs[k] = Gvs[k] + damping * v[k]
+  return Gvs
 
 class HessianFreeOptimizer(optimizer.Optimizer):
   """Optimizer that implements the gradient descent algorithm.
@@ -79,7 +128,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
   GATE_NONE = 0
   GATE_OP = 1
   GATE_GRAPH = 2
-  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False, use_locking=False, name="HessianFree"):
+  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False, hv_method = 0, use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
       learning_rate: A Tensor or a floating point value.  The learning
@@ -93,6 +142,9 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     self._learning_rate = learning_rate
     self._damping = damping
     self._fix_first_step = fix_first_step
+    self._Hv = Hv
+    if hv_method == 0:
+      self._Hv = Gv
 
   def _apply_dense(self, grad, var):
     return training_ops.apply_gradient_descent(
@@ -113,7 +165,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     self._learning_rate_tensor = ops.convert_to_tensor(self._learning_rate,
                                                        name="learning_rate")
 
-  def minimize(self, loss, global_step=None, var_list=None,
+  def minimize(self, loss, z=None, global_step=None, var_list=None,
                gate_gradients=GATE_OP, aggregation_method=None,
                colocate_gradients_with_ops=False, name=None,
                grad_loss=None):
@@ -160,18 +212,18 @@ class HessianFreeOptimizer(optimizer.Optimizer):
 
     valid_vars_with_grad = list(zip(valid_grads, vars_with_grad))
 
-    valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, valid_vars_with_grad, self._cg_iter, self._fix_first_step)
+    valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step)
 
     return self.apply_gradients(valid_vars_with_grad, global_step=global_step,
                                 name=name)
 
-  def _conjugate_gradient(self, loss, grads_and_vars, cg_iter, fix_first_step=False, init_deltas=None):
+  def _conjugate_gradient(self, loss, z, grads_and_vars, cg_iter, fix_first_step=False, init_deltas=None):
     minus_gradient = [g for g,v in grads_and_vars]
     variables = [v for g,v in grads_and_vars]
 
     H_vars = [array_ops.zeros_like(g) for g in minus_gradient]
     if init_deltas is not None:
-      H_vars = _Hv(loss, variables, init_deltas, self._damping)
+      H_vars = self._Hv(loss, z, variables, init_deltas, self._damping)
 
     curr_dirs = [g - b for g,b in list(zip(minus_gradient, H_vars))]
     curr_residuals = [g - b for g,b in list(zip(minus_gradient, H_vars))]
@@ -181,7 +233,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     residuals_history = []
     first_alpha = 1
     for i in range(cg_iter):
-      Hvs = _Hv(loss, variables, curr_dirs, self._damping)
+      Hvs = self._Hv(loss, z, variables, curr_dirs, self._damping)
 
       if len(Hvs) != len(variables):
         raise ValueError("xs and Hvs must have the same length.")
@@ -195,9 +247,9 @@ class HessianFreeOptimizer(optimizer.Optimizer):
       Hvs_concat = array_ops.concat(Hvs_flatten, 0)
       alpha = _dot(curr_residuals_concat, curr_residuals_concat) / _dot(curr_dirs_concat, Hvs_concat)
       alpha = gen_math_ops.maximum(alpha, 1e-6)
-      if i == 1 and fix_first_step:
+      if i == 0 and fix_first_step:
         first_alpha = alpha
-      curr_deltas = [d * alpha / first_alpha for d in curr_dirs]
+      curr_deltas = [d * (alpha / first_alpha) for d in curr_dirs]
       deltas = [ d1 + d0 for d0,d1 in list(zip(curr_deltas, deltas)) ]
       deltas_history.append(curr_deltas)
       residuals_history.append(curr_residuals)
