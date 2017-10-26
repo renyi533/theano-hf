@@ -128,7 +128,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
   GATE_NONE = 0
   GATE_OP = 1
   GATE_GRAPH = 2
-  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False, hv_method = 0, use_locking=False, name="HessianFree"):
+  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False, hv_method = 0, use_sgd=False, use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
       learning_rate: A Tensor or a floating point value.  The learning
@@ -142,6 +142,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     self._learning_rate = learning_rate
     self._damping = damping
     self._fix_first_step = fix_first_step
+    self._use_sgd = False
     self._Hv = Hv
     if hv_method == 0:
       self._Hv = Gv
@@ -212,7 +213,8 @@ class HessianFreeOptimizer(optimizer.Optimizer):
 
     valid_vars_with_grad = list(zip(valid_grads, vars_with_grad))
 
-    valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step)
+    if not self._use_sgd:
+      valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step)
 
     return self.apply_gradients(valid_vars_with_grad, global_step=global_step,
                                 name=name)
