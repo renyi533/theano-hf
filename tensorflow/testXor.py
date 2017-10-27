@@ -51,12 +51,22 @@ def main(_):
   cross_entropy = tf.reduce_mean(
       tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y))
 
-  if FLAGS.use_sgd == 'True':
+  if FLAGS.method == 'GradientDescent':
     optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
     train_step = optimizer.minimize(cross_entropy)
+    print('GradientDescent')
+  elif FLAGS.method == 'Adagrad':
+    optimizer = tf.train.AdagradOptimizer(FLAGS.learning_rate)
+    train_step = optimizer.minimize(cross_entropy)
+    print('Adagrad')
+  elif FLAGS.method == 'Adam':
+    optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+    train_step = optimizer.minimize(cross_entropy)
+    print('Adam')
   else:
     optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False)
     train_step = optimizer.minimize(loss=cross_entropy, z=y)
+    print('HessianFree')
 
   correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
   accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
@@ -78,15 +88,15 @@ def main(_):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--use_sgd', type=str, default='False',
+  parser.add_argument('--method', type=str, default='GradientDescent',
                       help='Directory for storing input data')
   parser.add_argument('--hv_method', type=int, default=0,
                       help='Directory for storing input data')
   parser.add_argument('--layer', type=int, default=1,
                       help='Directory for storing input data')
-  parser.add_argument('--cg_iter', type=int, default=1,
+  parser.add_argument('--cg_iter', type=int, default=5,
                       help='Directory for storing input data')
-  parser.add_argument('--damping', type=float, default=1.0,
+  parser.add_argument('--damping', type=float, default=0.1,
                       help='Directory for storing input data')
   parser.add_argument('--learning_rate', type=float, default=1.0,
                       help='Directory for storing input data')
