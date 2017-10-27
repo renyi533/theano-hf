@@ -26,7 +26,7 @@ def _Lop(f, x, v):
   if isinstance(x, list):
     return gradients.gradients(f, x, grad_ys=v)
   else:
-    return gradients.gradients(f, x, grad_ys=v)[0]
+    return gradients.gradients(f, x, grad_ys=v)
 
 def _Rop(f, x, v):
   assert not isinstance(x, list) or isinstance(v, list), "x and v should be of the same type"
@@ -35,7 +35,7 @@ def _Rop(f, x, v):
     return gradients.gradients(_Lop(f, x, w), w, grad_ys=v)
   else:
     w = array_ops.ones_like(f)
-    return gradients.gradients(_Lop(f, x, w), w, grad_ys=v)[0]
+    return gradients.gradients(_Lop(f, x, w), w, grad_ys=v)
 
 def _gauss_newton_vec(ys, zs, xs, vs):
   """Implements Gauss-Newton vector product.
@@ -142,7 +142,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     self._learning_rate = learning_rate
     self._damping = damping
     self._fix_first_step = fix_first_step
-    self._use_sgd = False
+    self._use_sgd = use_sgd
     self._Hv = Hv
     if hv_method == 0:
       self._Hv = Gv
@@ -248,7 +248,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
       curr_dirs_concat = array_ops.concat(curr_dirs_flatten, 0)
       Hvs_concat = array_ops.concat(Hvs_flatten, 0)
       alpha = _dot(curr_residuals_concat, curr_residuals_concat) / _dot(curr_dirs_concat, Hvs_concat)
-      alpha = gen_math_ops.maximum(alpha, 1e-6)
+      alpha = control_flow_ops.cond(gen_math_ops.is_finite(alpha), lambda: gen_math_ops.maximum(alpha, 1e-6), lambda : 1.0)
       if i == 0 and fix_first_step:
         first_alpha = alpha
       curr_deltas = [d * (alpha / first_alpha) for d in curr_dirs]
@@ -261,6 +261,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
 
 
       beta = _dot(new_residuals_concat, new_residuals_concat) / _dot(curr_residuals_concat, curr_residuals_concat)
+      beta = control_flow_ops.cond(gen_math_ops.is_finite(beta), lambda: beta, lambda : 0.0)
       #beta = gen_math_ops.maximum(beta, 1e-4)
       new_dirs = [r + beta * d for r,d in list(zip(new_residuals, curr_dirs))]
       curr_dirs = new_dirs
