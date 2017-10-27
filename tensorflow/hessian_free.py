@@ -248,7 +248,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
       curr_dirs_concat = array_ops.concat(curr_dirs_flatten, 0)
       Hvs_concat = array_ops.concat(Hvs_flatten, 0)
       alpha = _dot(curr_residuals_concat, curr_residuals_concat) / _dot(curr_dirs_concat, Hvs_concat)
-      alpha = control_flow_ops.cond(gen_math_ops.is_finite(alpha), lambda: gen_math_ops.maximum(alpha, 1e-6), lambda : 1.0)
+      alpha = control_flow_ops.cond(gen_math_ops.is_finite(alpha), lambda: gen_math_ops.maximum(alpha, 1e-6), lambda : ops.convert_to_tensor(1.0))
       if i == 0 and fix_first_step:
         first_alpha = alpha
       curr_deltas = [d * (alpha / first_alpha) for d in curr_dirs]
@@ -261,7 +261,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
 
 
       beta = _dot(new_residuals_concat, new_residuals_concat) / _dot(curr_residuals_concat, curr_residuals_concat)
-      beta = control_flow_ops.cond(gen_math_ops.is_finite(beta), lambda: beta, lambda : 0.0)
+      beta = control_flow_ops.cond(gen_math_ops.is_finite(beta), lambda: beta, lambda : ops.convert_to_tensor(0.0))
       #beta = gen_math_ops.maximum(beta, 1e-4)
       new_dirs = [r + beta * d for r,d in list(zip(new_residuals, curr_dirs))]
       curr_dirs = new_dirs
