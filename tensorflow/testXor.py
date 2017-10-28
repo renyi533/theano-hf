@@ -66,9 +66,8 @@ def main(_):
     train_step = optimizer.minimize(cross_entropy)
     print('Adam')
   else:
-    update_delta = FLAGS.update_delta == 'True'
     optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, \
-            damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False, update_init_delta=update_delta)
+            damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False, init_decay=FLAGS.init_decay)
     train_step = optimizer.minimize(loss=cross_entropy, z=y)
     print('HessianFree')
 
@@ -94,15 +93,15 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--method', type=str, default='GradientDescent',
                       help='Directory for storing input data')
-  parser.add_argument('--update_delta', type=str, default='False',
+  parser.add_argument('--init_decay', type=float, default=0.95,
                       help='Directory for storing input data')
-  parser.add_argument('--hv_method', type=int, default=0,
+  parser.add_argument('--hv_method', type=int, default=1,
                       help='Directory for storing input data')
-  parser.add_argument('--layer', type=int, default=1,
+  parser.add_argument('--layer', type=int, default=2,
                       help='Directory for storing input data')
-  parser.add_argument('--cg_iter', type=int, default=5,
+  parser.add_argument('--cg_iter', type=int, default=2,
                       help='Directory for storing input data')
-  parser.add_argument('--damping', type=float, default=0.1,
+  parser.add_argument('--damping', type=float, default=0.5,
                       help='Directory for storing input data')
   parser.add_argument('--learning_rate', type=float, default=1.0,
                       help='Directory for storing input data')

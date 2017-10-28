@@ -122,6 +122,13 @@ def Gv( loss, z, variables, v, damping):
       Gvs[k] = Gvs[k] + damping * v[k]
   return Gvs
 
+def Kv( loss, z, variables, v, damping):
+  Gvs = [array_ops.zeros_like(g) for g in v]
+  if damping > 0:
+    for k in range(len(Gvs)):
+      Gvs[k] = Gvs[k] + damping * v[k]
+  return Gvs
+
 class HessianFreeOptimizer(optimizer.Optimizer):
   """Optimizer that implements the gradient descent algorithm.
   """
@@ -129,7 +136,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
   GATE_OP = 1
   GATE_GRAPH = 2
   def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False,
-          hv_method = 0, use_sgd=False, update_init_delta=False, use_locking=False, name="HessianFree"):
+          hv_method = 0, use_sgd=False, init_decay=0.0, use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
       learning_rate: A Tensor or a floating point value.  The learning
@@ -145,9 +152,13 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     self._fix_first_step = fix_first_step
     self._use_sgd = use_sgd
     self._Hv = Hv
-    self._update_init_delta = update_init_delta
+    self._init_decay = init_decay
     if hv_method == 0:
       self._Hv = Gv
+    elif hv_method == 1:
+      self._Hv = Hv
+    else:
+      self._Hv = Kv
 
   def _apply_dense(self, grad, var):
     return training_ops.apply_gradient_descent(
@@ -223,8 +234,8 @@ class HessianFreeOptimizer(optimizer.Optimizer):
       valid_vars_with_grad, deltas_history, residuals_history = \
         self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step, init_deltas)
 
-      if self._update_init_delta:
-        slot_update = [self._get_or_make_slot(v, -0.95*g, 'init_deltas', self._name).assign(-0.95*g) for g,v in valid_vars_with_grad]
+      if self._init_decay > 0:
+        slot_update = [self._get_or_make_slot(v, g, 'init_deltas', self._name).assign(self._init_decay*g) for g,v in valid_vars_with_grad]
 
     with ops.control_dependencies(slot_update):
       train_op = self.apply_gradients(valid_vars_with_grad, global_step=global_step,
@@ -239,8 +250,8 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     if init_deltas is not None:
       H_vars = self._Hv(loss, z, variables, init_deltas, self._damping)
 
-    curr_dirs = [g - b for g,b in list(zip(minus_gradient, H_vars))]
-    curr_residuals = [g - b for g,b in list(zip(minus_gradient, H_vars))]
+    curr_dirs = [g + b for g,b in list(zip(minus_gradient, H_vars))]
+    curr_residuals = [g + b for g,b in list(zip(minus_gradient, H_vars))]
     deltas = [ array_ops.zeros_like(g) for g in curr_dirs ]
 
     deltas_history = []
