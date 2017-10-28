@@ -64,7 +64,9 @@ def main(_):
     train_step = optimizer.minimize(cross_entropy)
     print('Adam')
   else:
-    optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False)
+    update_delta = FLAGS.update_delta == 'True'
+    optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, \
+            damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False, update_init_delta=update_delta)
     train_step = optimizer.minimize(loss=cross_entropy, z=y)
     print('HessianFree')
 
@@ -89,6 +91,8 @@ def main(_):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--method', type=str, default='GradientDescent',
+                      help='Directory for storing input data')
+  parser.add_argument('--update_delta', type=str, default='False',
                       help='Directory for storing input data')
   parser.add_argument('--hv_method', type=int, default=0,
                       help='Directory for storing input data')

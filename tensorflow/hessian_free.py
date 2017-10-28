@@ -128,7 +128,8 @@ class HessianFreeOptimizer(optimizer.Optimizer):
   GATE_NONE = 0
   GATE_OP = 1
   GATE_GRAPH = 2
-  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False, hv_method = 0, use_sgd=False, use_locking=False, name="HessianFree"):
+  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False,
+          hv_method = 0, use_sgd=False, update_init_delta=False, use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
       learning_rate: A Tensor or a floating point value.  The learning
@@ -144,6 +145,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     self._fix_first_step = fix_first_step
     self._use_sgd = use_sgd
     self._Hv = Hv
+    self._update_init_delta = update_init_delta
     if hv_method == 0:
       self._Hv = Gv
 
@@ -203,21 +205,31 @@ class HessianFreeOptimizer(optimizer.Optimizer):
         grad_loss=grad_loss)
 
     vars_with_grad = [v for g, v in grads_and_vars if g is not None]
+
     if not vars_with_grad:
       raise ValueError(
           "No gradients provided for any variable, check your graph for ops"
           " that do not support gradients, between variables %s and loss %s." %
           ([str(v) for _, v in grads_and_vars], loss))
 
+    init_deltas = [self._zeros_slot(v, 'init_deltas', self._name) for v in vars_with_grad]
+
     valid_grads = [-g for g, v in grads_and_vars if g is not None]
 
     valid_vars_with_grad = list(zip(valid_grads, vars_with_grad))
 
+    slot_update = None
     if not self._use_sgd:
-      valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step)
+      valid_vars_with_grad, deltas_history, residuals_history = \
+        self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step, init_deltas)
 
-    return self.apply_gradients(valid_vars_with_grad, global_step=global_step,
+      if self._update_init_delta:
+        slot_update = [self._get_or_make_slot(v, -0.95*g, 'init_deltas', self._name).assign(-0.95*g) for g,v in valid_vars_with_grad]
+
+    with ops.control_dependencies(slot_update):
+      train_op = self.apply_gradients(valid_vars_with_grad, global_step=global_step,
                                 name=name)
+    return train_op
 
   def _conjugate_gradient(self, loss, z, grads_and_vars, cg_iter, fix_first_step=False, init_deltas=None):
     minus_gradient = [g for g,v in grads_and_vars]
