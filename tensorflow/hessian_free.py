@@ -250,9 +250,9 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     if init_deltas is not None:
       H_vars = self._Hv(loss, z, variables, init_deltas, self._damping)
 
-    curr_dirs = [g + b for g,b in list(zip(minus_gradient, H_vars))]
-    curr_residuals = [g + b for g,b in list(zip(minus_gradient, H_vars))]
-    deltas = [ array_ops.zeros_like(g) for g in curr_dirs ]
+    curr_dirs = [g - b for g,b in list(zip(minus_gradient, H_vars))]
+    curr_residuals = [g - b for g,b in list(zip(minus_gradient, H_vars))]
+    deltas = init_deltas if init_deltas is not None else [ array_ops.zeros_like(g) for g in curr_dirs ]
 
     deltas_history = []
     residuals_history = []
