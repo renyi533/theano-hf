@@ -36,13 +36,15 @@ def main(_):
 
   # Create the model
   x = tf.placeholder(tf.float32, [None, 2])
-  W = tf.Variable(tf.random_normal([2, 2], stddev=0.1))
-  b = tf.Variable(tf.random_normal([2], stddev=0.1))
+  #W = tf.Variable(tf.random_normal([2, 2], stddev=0.1))
+  #b = tf.Variable(tf.random_normal([2], stddev=0.1))
+  W = tf.Variable(tf.constant([ [0.1, -0.1], [-0.05, 0.05] ]))
+  b = tf.Variable(tf.constant([0.1, -0.1]))
   y = tf.matmul(x, W) + b
   for k in range(FLAGS.layer):
     y_a = tf.nn.tanh(y)
-    W2 = tf.Variable(tf.random_normal([2, 2], stddev=0.1))
-    b2 = tf.Variable(tf.random_normal([2], stddev=0.1))
+    W2 = tf.Variable(tf.constant([ [0.1, -0.1], [-0.05, 0.05] ]))
+    b2 = tf.Variable(tf.constant([0.1, -0.1]))
     y = tf.matmul(y_a, W2) + b2
 
   # Define loss and optimizer
