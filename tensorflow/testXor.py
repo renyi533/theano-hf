@@ -38,13 +38,13 @@ def main(_):
   x = tf.placeholder(tf.float32, [None, 2])
   #W = tf.Variable(tf.random_normal([2, 2], stddev=0.1))
   #b = tf.Variable(tf.random_normal([2], stddev=0.1))
-  W = tf.Variable(tf.constant([ [0.1, -0.1], [-0.05, 0.05] ]))
-  b = tf.Variable(tf.constant([0.1, -0.1]))
+  W = tf.Variable(tf.constant([ [0.1, 0.11], [0.05, 0.06] ]))
+  b = tf.Variable(tf.constant([0.1, 0.11]))
   y = tf.matmul(x, W) + b
   for k in range(FLAGS.layer):
     y_a = tf.nn.tanh(y)
-    W2 = tf.Variable(tf.constant([ [0.1, -0.1], [-0.05, 0.05] ]))
-    b2 = tf.Variable(tf.constant([0.1, -0.1]))
+    W2 = tf.Variable(tf.constant([ [0.1, 0.11], [0.06, 0.05] ]))
+    b2 = tf.Variable(tf.constant([0.1, 0.11]))
     y = tf.matmul(y_a, W2) + b2
 
   # Define loss and optimizer
@@ -91,17 +91,17 @@ def main(_):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--method', type=str, default='GradientDescent',
+  parser.add_argument('--method', type=str, default='HessianFree',
                       help='Directory for storing input data')
-  parser.add_argument('--init_decay', type=float, default=0.95,
+  parser.add_argument('--init_decay', type=float, default=0.2,
                       help='Directory for storing input data')
-  parser.add_argument('--hv_method', type=int, default=1,
+  parser.add_argument('--hv_method', type=int, default=2,
                       help='Directory for storing input data')
   parser.add_argument('--layer', type=int, default=2,
                       help='Directory for storing input data')
   parser.add_argument('--cg_iter', type=int, default=2,
                       help='Directory for storing input data')
-  parser.add_argument('--damping', type=float, default=0.5,
+  parser.add_argument('--damping', type=float, default=0.1,
                       help='Directory for storing input data')
   parser.add_argument('--learning_rate', type=float, default=1.0,
                       help='Directory for storing input data')

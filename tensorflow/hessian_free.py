@@ -61,6 +61,32 @@ def _gauss_newton_vec(ys, zs, xs, vs):
   jhjv = gradients.gradients(zs, xs, hjv, gate_gradients=True)
   return jhjv, hjv
 
+
+def _gauss_newton_vec_2(ys, zs, xs, vs):
+  """Implements Gauss-Newton vector product.
+  Args:
+    ys: Loss function.
+    zs: Before output layer (input to softmax).
+    xs: Weights, list of tensors.
+    vs: List of perturbation vector for each weight tensor.
+  Returns:
+    J'HJv: Guass-Newton vector product.
+  """
+  # Validate the input
+  if type(xs) == list:
+    if len(vs) != len(xs):
+      raise ValueError("xs and vs must have the same length.")
+
+  grads_z = gradients.gradients(ys, zs, gate_gradients=True)
+
+  Jv = _Rop(zs, xs, vs)
+
+  HJv = _Rop(grads_z, zs, Jv)
+
+  Gv = gradients.gradients(zs, xs, HJv, gate_gradients=True)
+
+  return Gv, HJv
+
 def _hessian_vector_product(ys, xs, v):
   """Multiply the Hessian of `ys` wrt `xs` by `v`.
   This is an efficient construction that uses a backprop-like approach
@@ -122,6 +148,13 @@ def Gv( loss, z, variables, v, damping):
       Gvs[k] = Gvs[k] + damping * v[k]
   return Gvs
 
+def Gv2( loss, z, variables, v, damping):
+  Gvs = _gauss_newton_vec_2(loss, z, variables, v)[0]
+  if damping > 0:
+    for k in range(len(Gvs)):
+      Gvs[k] = Gvs[k] + damping * v[k]
+  return Gvs
+
 def Kv( loss, z, variables, v, damping):
   Gvs = [array_ops.zeros_like(g) for g in v]
   if damping > 0:
@@ -136,7 +169,8 @@ class HessianFreeOptimizer(optimizer.Optimizer):
   GATE_OP = 1
   GATE_GRAPH = 2
   def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False,
-          hv_method = 0, use_sgd=False, init_decay=0.0, use_locking=False, name="HessianFree"):
+          hv_method = 0, use_sgd=False, init_decay=0.0, cg_init_ratio=0.0,
+          use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
       learning_rate: A Tensor or a floating point value.  The learning
@@ -153,10 +187,13 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     self._use_sgd = use_sgd
     self._Hv = Hv
     self._init_decay = init_decay
+    self._cg_init_ratio = cg_init_ratio
     if hv_method == 0:
       self._Hv = Gv
     elif hv_method == 1:
       self._Hv = Hv
+    elif hv_method == 2:
+      self._Hv = Gv2
     else:
       self._Hv = Kv
 
@@ -250,8 +287,8 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     if init_deltas is not None:
       H_vars = self._Hv(loss, z, variables, init_deltas, self._damping)
 
-    curr_dirs = [g - b for g,b in list(zip(minus_gradient, H_vars))]
-    curr_residuals = [g - b for g,b in list(zip(minus_gradient, H_vars))]
+    curr_dirs = [g - self._cg_init_ratio * b for g,b in list(zip(minus_gradient, H_vars))]
+    curr_residuals = [g - self._cg_init_ratio * b for g,b in list(zip(minus_gradient, H_vars))]
     deltas = init_deltas if init_deltas is not None else [ array_ops.zeros_like(g) for g in curr_dirs ]
 
     deltas_history = []
