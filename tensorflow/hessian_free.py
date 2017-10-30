@@ -169,7 +169,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
   GATE_OP = 1
   GATE_GRAPH = 2
   def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False,
-          hv_method = 0, use_sgd=False, init_decay=0.0, cg_init_ratio=0.0,
+          hv_method = 0, use_sgd=False, init_decay=0.0, cg_init_ratio=1.0,
           use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
@@ -177,7 +177,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
         rate to use.
       use_locking: If True use locks for update operations.
       name: Optional name prefix for the operations created when applying
-        gradients. Defaults to "GradientDescent".
+        gradients. Defaults to "HessianFree".
     """
     super(HessianFreeOptimizer, self).__init__(use_locking, name)
     self._cg_iter = cg_iter
