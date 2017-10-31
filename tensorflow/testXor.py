@@ -52,7 +52,7 @@ def main(_):
 
   cross_entropy = tf.reduce_mean(
       tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y))
-
+  tf.summary.scalar('cross_entropy', cross_entropy)
   if FLAGS.method == 'GradientDescent':
     optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
     train_step = optimizer.minimize(cross_entropy)
@@ -67,21 +67,24 @@ def main(_):
     print('Adam')
   else:
     optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, \
-            damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False, init_decay=FLAGS.init_decay)
+            damping=FLAGS.damping, hv_method=FLAGS.hv_method, fix_first_step=False, init_decay=FLAGS.init_decay)
     train_step = optimizer.minimize(loss=cross_entropy, z=y)
     print('HessianFree')
 
   correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
   accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-
+  tf.summary.scalar('accuracy', accuracy)
   sess = tf.InteractiveSession()
+  merged = tf.summary.merge_all()
+  train_writer = tf.summary.FileWriter('./train', sess.graph)
   tf.global_variables_initializer().run()
   batch_xs = [ [0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
   batch_ys = [ [0.0, 1.0], [1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]
 
   # Train
-  for i in range(1000):
-    _, loss, accu = sess.run([train_step, cross_entropy, accuracy], feed_dict={x: batch_xs, y_: batch_ys})
+  for i in range(10000):
+    _, loss, accu, summary = sess.run([train_step, cross_entropy, accuracy, merged], feed_dict={x: batch_xs, y_: batch_ys})
+    train_writer.add_summary(summary, i)
     if i % 50 == 0:
       print('batch: %d. loss: %f, accuracy: %f' % (i, loss, accu))
 
@@ -92,6 +95,7 @@ def main(_):
   # Test trained model
   print(sess.run([accuracy, cross_entropy], feed_dict={x: batch_xs,
                                       y_: batch_ys}))
+  train_writer.close()
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
