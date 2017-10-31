@@ -62,7 +62,7 @@ def main(_):
     train_step = optimizer.minimize(cross_entropy)
     print('Adagrad')
   elif FLAGS.method == 'Adam':
-    optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+    optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate, epsilon=1e-1)
     train_step = optimizer.minimize(cross_entropy)
     print('Adam')
   else:
