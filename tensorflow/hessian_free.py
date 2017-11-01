@@ -136,30 +136,26 @@ def _dot(t0, t1):
 
 def Hv( loss, z, variables, v, damping):
   Hvs = _hessian_vector_product(loss, variables, v)
-  if damping > 0:
-    for k in range(len(Hvs)):
-      Hvs[k] = Hvs[k] + damping * v[k]
+  for k in range(len(Hvs)):
+    Hvs[k] = Hvs[k] + damping * v[k]
   return Hvs
 
 def Gv( loss, z, variables, v, damping):
   Gvs = _gauss_newton_vec(loss, z, variables, v)[0]
-  if damping > 0:
-    for k in range(len(Gvs)):
-      Gvs[k] = Gvs[k] + damping * v[k]
+  for k in range(len(Gvs)):
+    Gvs[k] = Gvs[k] + damping * v[k]
   return Gvs
 
 def Gv2( loss, z, variables, v, damping):
   Gvs = _gauss_newton_vec_2(loss, z, variables, v)[0]
-  if damping > 0:
-    for k in range(len(Gvs)):
-      Gvs[k] = Gvs[k] + damping * v[k]
+  for k in range(len(Gvs)):
+    Gvs[k] = Gvs[k] + damping * v[k]
   return Gvs
 
 def Kv( loss, z, variables, v, damping):
   Gvs = [array_ops.zeros_like(g) for g in v]
-  if damping > 0:
-    for k in range(len(Gvs)):
-      Gvs[k] = Gvs[k] + damping * v[k]
+  for k in range(len(Gvs)):
+    Gvs[k] = Gvs[k] + damping * v[k]
   return Gvs
 
 class HessianFreeOptimizer(optimizer.Optimizer):
@@ -181,8 +177,8 @@ class HessianFreeOptimizer(optimizer.Optimizer):
     """
     super(HessianFreeOptimizer, self).__init__(use_locking, name)
     self._cg_iter = cg_iter
-    self._learning_rate = learning_rate
-    self._damping = damping
+    self._learning_rate = ops.convert_to_tensor(learning_rate)
+    self._damping = ops.convert_to_tensor(damping)
     self._fix_first_step = fix_first_step
     self._use_sgd = use_sgd
     self._Hv = Hv
