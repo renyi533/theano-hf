@@ -27,7 +27,7 @@ import sys
 
 import tensorflow as tf
 from hessian_free import HessianFreeOptimizer
-
+from time import time
 FLAGS = None
 
 
@@ -62,7 +62,7 @@ def main(_):
     train_step = optimizer.minimize(cross_entropy)
     print('Adagrad')
   elif FLAGS.method == 'Adam':
-    optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+    optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate, epsilon=1e-1)
     train_step = optimizer.minimize(cross_entropy)
     print('Adam')
   else:
@@ -79,6 +79,7 @@ def main(_):
   batch_xs = [ [0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
   batch_ys = [ [0.0, 1.0], [1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]
 
+  begin = time()
   # Train
   for i in range(1000):
     _, loss, accu = sess.run([train_step, cross_entropy, accuracy], feed_dict={x: batch_xs, y_: batch_ys})
@@ -92,6 +93,7 @@ def main(_):
   # Test trained model
   print(sess.run([accuracy, cross_entropy], feed_dict={x: batch_xs,
                                       y_: batch_ys}))
+  print('elapsed time: %f' % (time()-begin))
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
