@@ -67,7 +67,7 @@ def main(_):
     print('Adam')
   else:
     optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, \
-            damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False, init_decay=FLAGS.init_decay)
+            damping=FLAGS.damping, hv_method=FLAGS.hv_method, init_decay=FLAGS.init_decay)
     train_step = optimizer.minimize(loss=cross_entropy, z=y)
     print('HessianFree')
 
@@ -81,7 +81,7 @@ def main(_):
 
   begin = time()
   # Train
-  for i in range(1000):
+  for i in range(10000):
     _, loss, accu = sess.run([train_step, cross_entropy, accuracy], feed_dict={x: batch_xs, y_: batch_ys})
     if i % 50 == 0:
       print('batch: %d. loss: %f, accuracy: %f' % (i, loss, accu))
