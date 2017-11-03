@@ -257,7 +257,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
           " that do not support gradients, between variables %s and loss %s." %
           ([str(v) for _, v in grads_and_vars], loss))
 
-    init_deltas = [self._zeros_slot(v, 'init_deltas', self._name) for v in vars_with_grad]
+    init_deltas = [self._zeros_slot(v, 'init_deltas', self._name) for v in vars_with_grad] if self._init_decay > 0 else None
 
     valid_grads = [-g for g, v in grads_and_vars if g is not None]
 
