@@ -27,6 +27,7 @@ import sys
 
 import tensorflow as tf
 from hessian_free import HessianFreeOptimizer
+from dc_asgd_optimizer import DCAsgdOptimizer
 
 FLAGS = None
 
@@ -55,32 +56,29 @@ def main(_):
   tf.summary.scalar('cross_entropy', cross_entropy)
   if FLAGS.method == 'GradientDescent':
     optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
-    train_step = optimizer.minimize(cross_entropy)
     print('GradientDescent')
   elif FLAGS.method == 'Adagrad':
     optimizer = tf.train.AdagradOptimizer(FLAGS.learning_rate)
-    train_step = optimizer.minimize(cross_entropy)
     print('Adagrad')
-  elif FLAGS.method == 'Adam':
-    optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
-    train_step = optimizer.minimize(cross_entropy)
-    print('Adam')
   else:
-    optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, \
-            damping=FLAGS.damping, hv_method=FLAGS.hv_method, fix_first_step=False, init_decay=FLAGS.init_decay)
-    train_step = optimizer.minimize(loss=cross_entropy, z=y)
-    print('HessianFree')
+    optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+    print('Adam')
+
+  sess = tf.InteractiveSession()
+  global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
+  #tf.train.global_step(sess, global_step_tensor)
+  optimizer = DCAsgdOptimizer(optimizer, 0.01, 0.1)
+  train_step = optimizer.minimize(cross_entropy, global_step=global_step_tensor)
 
   correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
   accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
   tf.summary.scalar('accuracy', accuracy)
-  sess = tf.InteractiveSession()
   merged = tf.summary.merge_all()
   train_writer = tf.summary.FileWriter('./train', sess.graph)
   tf.global_variables_initializer().run()
+  tf.local_variables_initializer().run()
   batch_xs = [ [0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
   batch_ys = [ [0.0, 1.0], [1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]
-
   # Train
   for i in range(10000):
     _, loss, accu, summary = sess.run([train_step, cross_entropy, accuracy, merged], feed_dict={x: batch_xs, y_: batch_ys})
@@ -105,7 +103,7 @@ if __name__ == '__main__':
                       help='Directory for storing input data')
   parser.add_argument('--hv_method', type=int, default=1,
                       help='Directory for storing input data')
-  parser.add_argument('--layer', type=int, default=2,
+  parser.add_argument('--layer', type=int, default=1,
                       help='Directory for storing input data')
   parser.add_argument('--cg_iter', type=int, default=2,
                       help='Directory for storing input data')
