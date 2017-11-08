@@ -46,6 +46,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
                lambda1,
                lambda2,
                local_idx=-1,
+               global_step=None,
                use_locking=False,
                name="DCAsgdOptimizer"):
 
@@ -57,6 +58,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     self._local_vars = []
     self._var_local_var_maps = {}
     self._local_idx = local_idx
+    self._global_step=global_step
 
   def compute_gradients(self, loss, var_list=None,
                         gate_gradients=optimizer.Optimizer.GATE_OP,
@@ -84,12 +86,16 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     local_vars_assign = self.allocate_local_vars(var_list)
 
     with ops.colocate_with(loss):
-      curr_step = training_util.get_global_step()
-      if isinstance(curr_step, ops.Tensor):
-        self._local_step = curr_step + 0
-        local_vars_assign.append(self._local_step)
+      if self._global_step is None:
+        curr_step = training_util.get_global_step()
+        if isinstance(curr_step, ops.Tensor):
+          self._local_step = curr_step + 0
+          local_vars_assign.append(self._local_step)
+        else:
+          self._local_step = None
       else:
-        self._local_step = None
+        self._local_step = self._global_step+0
+        local_vars_assign.append(self._local_step)
 
     with ops.control_dependencies(local_vars_assign):
       loss = gen_array_ops.identity(loss)
@@ -161,7 +167,8 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     if not grads_and_vars:
       raise ValueError("Must supply at least one variable")
     grads = [g for g, v in grads_and_vars]
-
+    if self._global_step is not None:
+      global_step = self._global_step
     with ops.name_scope("gradient_compensation", self._name) as name, ops.control_dependencies(grads):
       new_grads = []
       var_list = []
@@ -187,7 +194,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
 
     if global_step is not None and self._local_step is not None:
       with ops.control_dependencies(grads), ops.colocate_with(global_step):
-        staleness = gen_array_ops.reshape(global_step - self._local_step, shape=())
+        staleness = gen_array_ops.reshape(gen_array_ops.identity(global_step) - self._local_step, shape=())
         summary.scalar("DC-ASGD Gradient staleness", staleness)
       return control_flow_ops.group(*[train_op, staleness])
     else:
