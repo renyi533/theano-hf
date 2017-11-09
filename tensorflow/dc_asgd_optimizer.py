@@ -37,7 +37,28 @@ from tensorflow.python.ops import gen_array_ops
 from tensorflow.python.training import training_util
 from tensorflow.python.summary import summary
 from tensorflow.python.ops import init_ops
+from tensorflow.python.ops import gradients
 
+
+def _hessian_vector_product(ys, xs, v, grads=None):
+
+  # Validate the input
+  length = len(xs)
+  if len(v) != length:
+    raise ValueError("xs and v must have the same length.")
+
+  # First backprop
+  if grads is None:
+    grads = gradients.gradients(ys, xs)
+
+  assert len(grads) == length
+  elemwise_products = [
+      math_ops.multiply(grad_elem, array_ops.stop_gradient(v_elem))
+      for grad_elem, v_elem in zip(grads, v) if grad_elem is not None
+  ]
+
+  # Second backprop
+  return gradients.gradients(elemwise_products, xs)
 
 class DCAsgdOptimizer(optimizer.Optimizer):
 
@@ -45,6 +66,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
                opt,
                lambda1,
                lambda2,
+               lambda3 = 0.0,
                local_idx=-1,
                global_step=None,
                use_locking=False,
@@ -55,6 +77,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     self._opt = opt
     self._lambda1 = ops.convert_to_tensor(lambda1)
     self._lambda2 = ops.convert_to_tensor(lambda2)
+    self._lambda3 = ops.convert_to_tensor(lambda3)
     self._local_vars = []
     self._var_local_var_maps = {}
     self._local_idx = local_idx
@@ -99,6 +122,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
 
     with ops.control_dependencies(local_vars_assign):
       loss = gen_array_ops.identity(loss)
+      self._loss = loss
       grads_and_vars = self._opt.compute_gradients(loss, var_list=var_list, gate_gradients=gate_gradients,
         aggregation_method=aggregation_method,
         colocate_gradients_with_ops=colocate_gradients_with_ops,
@@ -167,27 +191,53 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     if not grads_and_vars:
       raise ValueError("Must supply at least one variable")
     grads = [g for g, v in grads_and_vars]
+    var_list = [v for g, v in grads_and_vars]
+
     if self._global_step is not None:
       global_step = self._global_step
-    with ops.name_scope("gradient_compensation", self._name) as name, ops.control_dependencies(grads):
-      new_grads = []
-      var_list = []
-      for g,v in grads_and_vars:
-        if v in self._var_local_var_maps:
+
+    def _comp_grad_worker():
+      new_grads_worker = []
+      var_diff_array = []
+      with ops.name_scope("gradient_compensation_worker", self._name) as name, ops.control_dependencies(grads):
+        for g,v in grads_and_vars:
+          assert v in self._var_local_var_maps
+          var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
+          var_diff_array.append(var_diff)
+        Hv = _hessian_vector_product(self._loss, var_list, var_diff_array, grads=grads)
+
+        for g, delta in zip(grads, Hv):
+          new_grads_worker.append(math_ops.add(g, delta * self._lambda3))
+      return new_grads_worker, var_diff_array
+
+    def _comp_grad_ps():
+      new_grads_ps = []
+      var_diff_array = []
+      with ops.name_scope("gradient_compensation_ps", self._name) as name, ops.control_dependencies(grads):
+        for g,v in grads_and_vars:
+          assert v in self._var_local_var_maps
           with ops.device(v.device):
             var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
-
+            var_diff_array.append(var_diff)
+            zero_tensors = array_ops.zeros_like(g)
             alg2_delta  = control_flow_ops.cond(self._lambda2>0,
                     lambda: math_ops.multiply(math_ops.multiply(var_diff, math_ops.multiply(g, g)), self._lambda2),
-                    lambda: array_ops.zeros_like(g))
+                    lambda: zero_tensors)
 
             alg1_delta = control_flow_ops.cond(self._lambda1>0,
                     lambda: math_ops.multiply(math_ops.multiply(var_diff, math_ops.abs(g)),  self._lambda1),
-                    lambda: array_ops.zeros_like(g))
+                    lambda: zero_tensors)
 
             g = math_ops.add(math_ops.add(g, alg2_delta), alg1_delta)
-        new_grads.append(g)
-        var_list.append(v)
+          new_grads_ps.append(g)
+
+      return new_grads_ps, var_diff_array
+
+    with ops.name_scope("gradient_compensation", self._name) as name:
+      new_grads, var_diff_array = control_flow_ops.cond(self._lambda3 > 0, _comp_grad_worker, _comp_grad_ps)
+      for v, diff in zip(var_list, var_diff_array):
+        summary.histogram(v.name+'_delta', diff)
+        summary.histogram(v.name, v)
       comp_grads_and_vars = list(zip(new_grads, var_list))
 
       train_op = self._opt.apply_gradients(comp_grads_and_vars, global_step=global_step, name=name)
@@ -196,7 +246,11 @@ class DCAsgdOptimizer(optimizer.Optimizer):
       with ops.control_dependencies(grads), ops.colocate_with(global_step):
         staleness = gen_array_ops.reshape(gen_array_ops.identity(global_step) - self._local_step, shape=())
         summary.scalar("DC-ASGD Gradient staleness", staleness)
-      return control_flow_ops.group(*[train_op, staleness])
+
+      with ops.control_dependencies(new_grads), ops.colocate_with(global_step):
+        staleness_final = gen_array_ops.reshape(gen_array_ops.identity(global_step) - self._local_step, shape=())
+        summary.scalar("DC-ASGD final staleness", staleness_final)
+      return control_flow_ops.group(*[train_op, staleness, staleness_final])
     else:
       return train_op
 
