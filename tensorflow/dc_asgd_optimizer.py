@@ -68,6 +68,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
                lambda2,
                lambda3 = 0.0,
                local_idx=-1,
+               ps_comp = True,
                global_step=None,
                use_locking=False,
                name="DCAsgdOptimizer"):
@@ -82,6 +83,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     self._var_local_var_maps = {}
     self._local_idx = local_idx
     self._global_step=global_step
+    self._ps_comp = ps_comp
 
   def compute_gradients(self, loss, var_list=None,
                         gate_gradients=optimizer.Optimizer.GATE_OP,
@@ -234,7 +236,12 @@ class DCAsgdOptimizer(optimizer.Optimizer):
       return new_grads_ps, var_diff_array
 
     with ops.name_scope("gradient_compensation", self._name) as name:
-      new_grads, var_diff_array = control_flow_ops.cond(self._lambda3 > 0, _comp_grad_worker, _comp_grad_ps)
+      #new_grads, var_diff_array = control_flow_ops.cond(self._lambda3 > 0, _comp_grad_worker, _comp_grad_ps)
+      if self._ps_comp:
+        new_grads, var_diff_array = _comp_grad_ps()
+      else:
+        new_grads, var_diff_array = _comp_grad_worker()
+
       for v, diff in zip(var_list, var_diff_array):
         summary.histogram(v.name+'_delta', diff)
         summary.histogram(v.name, v)

@@ -67,7 +67,7 @@ def main(_):
   sess = tf.InteractiveSession()
   global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
   #tf.train.global_step(sess, global_step_tensor)
-  optimizer = DCAsgdOptimizer(optimizer, 0.01, 0.1, lambda3=0.0, global_step=global_step_tensor)
+  optimizer = DCAsgdOptimizer(optimizer, 0.01, 0.1, lambda3=0.0, ps_comp=False, global_step=global_step_tensor)
   train_step = optimizer.minimize(cross_entropy, global_step=global_step_tensor)
 
   correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
