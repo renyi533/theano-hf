@@ -68,6 +68,9 @@ class DCAsgdOptimizer(optimizer.Optimizer):
                lambda2,
                lambda3 = 0.0,
                local_idx=-1,
+               rescale_variance = True,
+               momentum = 0.95,
+               epsilon = 1e-7,
                ps_comp = True,
                global_step=None,
                use_locking=False,
@@ -84,6 +87,9 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     self._local_idx = local_idx
     self._global_step=global_step
     self._ps_comp = ps_comp
+    self._momentum = momentum
+    self._epsilon = epsilon
+    self._rescale_variance = rescale_variance
 
   def compute_gradients(self, loss, var_list=None,
                         gate_gradients=optimizer.Optimizer.GATE_OP,
@@ -215,6 +221,9 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     def _comp_grad_ps():
       new_grads_ps = []
       var_diff_array = []
+      if self._rescale_variance:
+        self._create_slots(var_list)
+
       with ops.name_scope("gradient_compensation_ps", self._name) as name, ops.control_dependencies(grads):
         for g,v in grads_and_vars:
           assert v in self._var_local_var_maps
@@ -222,15 +231,23 @@ class DCAsgdOptimizer(optimizer.Optimizer):
             var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
             var_diff_array.append(var_diff)
             zero_tensors = array_ops.zeros_like(g)
+            g_dot_g = math_ops.multiply(g, g)
             alg2_delta  = control_flow_ops.cond(self._lambda2>0,
-                    lambda: math_ops.multiply(math_ops.multiply(var_diff, math_ops.multiply(g, g)), self._lambda2),
+                    lambda: math_ops.multiply(math_ops.multiply(var_diff, g_dot_g), self._lambda2),
                     lambda: zero_tensors)
 
             alg1_delta = control_flow_ops.cond(self._lambda1>0,
                     lambda: math_ops.multiply(math_ops.multiply(var_diff, math_ops.abs(g)),  self._lambda1),
                     lambda: zero_tensors)
 
-            g = math_ops.add(math_ops.add(g, alg2_delta), alg1_delta)
+            delta = alg2_delta + alg1_delta
+            if self._rescale_variance:
+              acc = self.get_slot(v, "dc_asgd_accumulator")
+              variance_update_op = state_ops.assign(acc, self._momentum * acc + (1-self._momentum) * g_dot_g)
+              with ops.control_dependencies([variance_update_op]):
+                delta = delta / math_ops.sqrt(gen_array_ops.identity(acc) + self._epsilon)
+                #print('rescaled compensation')
+            g = math_ops.add(g, delta)
           new_grads_ps.append(g)
 
       return new_grads_ps, var_diff_array
@@ -261,6 +278,22 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     else:
       return train_op
 
+  def _create_slots(self, var_list):
+    for v in var_list:
+      with ops.colocate_with(v):
+        dtype = v.dtype.base_dtype
+        if v.get_shape().is_fully_defined():
+          init = init_ops.constant_initializer(0.0,
+                                               dtype=dtype)
+        else:
+          # Use a Tensor instead of initializer if variable does not have static
+          # shape.
+          init_constant = gen_array_ops.fill(array_ops.shape(v),
+                                             0.0)
+          init = math_ops.cast(init_constant, dtype)
+      self._get_or_make_slot_with_initializer(v, init, v.get_shape(), dtype,
+                                              "dc_asgd_accumulator", self._name)
+
   def get_slot(self, *args, **kwargs):
     """Return a slot named "name" created for "var" by the Optimizer.
 
@@ -273,6 +306,10 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     Returns:
       The `Variable` for the slot if it was created, `None` otherwise.
     """
+    result  = super(DCAsgdOptimizer, self).get_slot(*args, **kwargs)
+    if result is not None:
+      return result
+
     return self._opt.get_slot(*args, **kwargs)
 
   def get_slot_names(self, *args, **kwargs):
@@ -287,4 +324,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     Returns:
       A list of strings.
     """
-    return self._opt.get_slot_names(*args, **kwargs)
+    result  = super(DCAsgdOptimizer, self).get_slot_names(*args, **kwargs)
+    result2 = self._opt.get_slot_names(*args, **kwargs)
+    result.extend(result2)
+    return sorted(result)
