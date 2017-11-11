@@ -64,9 +64,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
 
   def __init__(self,
                opt,
-               lambda1,
-               lambda2,
-               lambda3 = 0.0,
+               lambda_val,
                local_idx=-1,
                rescale_variance = True,
                momentum = 0.95,
@@ -79,9 +77,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     super(DCAsgdOptimizer, self).__init__(use_locking, name)
     logging.info("DCAsgdOptimizer init")
     self._opt = opt
-    self._lambda1 = ops.convert_to_tensor(lambda1)
-    self._lambda2 = ops.convert_to_tensor(lambda2)
-    self._lambda3 = ops.convert_to_tensor(lambda3)
+    self._lambda = ops.convert_to_tensor(lambda_val)
     self._local_vars = []
     self._var_local_var_maps = {}
     self._local_idx = local_idx
@@ -215,39 +211,34 @@ class DCAsgdOptimizer(optimizer.Optimizer):
         Hv = _hessian_vector_product(self._loss, var_list, var_diff_array, grads=grads)
 
         for g, delta in zip(grads, Hv):
-          new_grads_worker.append(math_ops.add(g, delta * self._lambda3))
+          new_grads_worker.append(math_ops.add(g, delta * self._lambda))
       return new_grads_worker, var_diff_array
 
     def _comp_grad_ps():
       new_grads_ps = []
       var_diff_array = []
-      if self._rescale_variance:
+      if self._rescale_variance and (self._momentum > 0.0):
         self._create_slots(var_list)
 
-      with ops.name_scope("gradient_compensation_ps", self._name) as name, ops.control_dependencies(grads):
+      with ops.name_scope("gradient_compensation_ps", self._name) as name:
         for g,v in grads_and_vars:
           assert v in self._var_local_var_maps
-          with ops.device(v.device):
+          with ops.device(v.device), ops.control_dependencies([g]):
             var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
             var_diff_array.append(var_diff)
-            zero_tensors = array_ops.zeros_like(g)
             g_dot_g = math_ops.multiply(g, g)
-            alg2_delta  = control_flow_ops.cond(self._lambda2>0,
-                    lambda: math_ops.multiply(math_ops.multiply(var_diff, g_dot_g), self._lambda2),
-                    lambda: zero_tensors)
+            delta = math_ops.multiply(var_diff, g_dot_g)
 
-            alg1_delta = control_flow_ops.cond(self._lambda1>0,
-                    lambda: math_ops.multiply(math_ops.multiply(var_diff, math_ops.abs(g)),  self._lambda1),
-                    lambda: zero_tensors)
-
-            delta = alg2_delta + alg1_delta
             if self._rescale_variance:
-              acc = self.get_slot(v, "dc_asgd_accumulator")
-              variance_update_op = state_ops.assign(acc, self._momentum * acc + (1-self._momentum) * g_dot_g)
-              with ops.control_dependencies([variance_update_op]):
-                delta = delta / math_ops.sqrt(gen_array_ops.identity(acc) + self._epsilon)
-                #print('rescaled compensation')
-            g = math_ops.add(g, delta)
+              if self._momentum > 0.0:
+                acc = self.get_slot(v, "dc_asgd_accumulator")
+                variance_update_op = state_ops.assign(acc, self._momentum * acc + (1-self._momentum) * g_dot_g)
+                with ops.control_dependencies([variance_update_op]):
+                  delta = delta / math_ops.sqrt(gen_array_ops.identity(acc) + self._epsilon)
+              else:
+                delta = math_ops.multiply(var_diff, math_ops.abs(g))
+
+          g = math_ops.add(g, delta * self._lambda)
           new_grads_ps.append(g)
 
       return new_grads_ps, var_diff_array
