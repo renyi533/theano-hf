@@ -20,6 +20,7 @@ from __future__ import print_function
 
 from tensorflow.core.framework import types_pb2
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import data_flow_ops
@@ -232,9 +233,12 @@ class DCAsgdOptimizer(optimizer.Optimizer):
             if self._rescale_variance:
               if self._momentum > 0.0:
                 acc = self.get_slot(v, "dc_asgd_accumulator")
-                variance_update_op = state_ops.assign(acc, self._momentum * acc + (1-self._momentum) * g_dot_g)
+                updated_acc = self._momentum * acc + (1.0 - self._momentum) * g_dot_g
+                if global_step is not None:
+                  updated_acc = updated_acc / (1.0 - math_ops.pow(self._momentum, math_ops.cast(global_step, dtypes.float32)+1.0))
+                variance_update_op = state_ops.assign(acc, updated_acc)
                 with ops.control_dependencies([variance_update_op]):
-                  delta = delta / math_ops.sqrt(gen_array_ops.identity(acc) + self._epsilon)
+                  delta = delta / math_ops.sqrt(updated_acc + self._epsilon)
               else:
                 delta = math_ops.multiply(var_diff, math_ops.abs(g))
 
