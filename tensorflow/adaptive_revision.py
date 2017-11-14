@@ -51,7 +51,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
   """
 
   def __init__(self, learning_rate, initial_accumulator_value=0.1, local_idx=-1,
-               delay_tolerant = True,
+               delay_tolerant = True, global_step = None,
                use_locking=False, name="AdaptiveRevision"):
     """Construct a new AdaptiveRevision optimizer.
 
@@ -78,6 +78,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
     self._var_local_var_maps = {}
     self._local_idx = local_idx
     self._delay_tolerant = delay_tolerant
+    self._global_step=global_step
 
   def compute_gradients(self, loss, var_list=None,
                         gate_gradients=optimizer.Optimizer.GATE_OP,
@@ -103,6 +104,18 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       var_list = ops.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES)
 
     local_vars_assign = self.allocate_local_vars(var_list)
+
+    with ops.colocate_with(loss):
+      if self._global_step is None:
+        curr_step = training_util.get_global_step()
+        if isinstance(curr_step, ops.Tensor):
+          self._local_step = curr_step + 0
+          local_vars_assign.append(self._local_step)
+        else:
+          self._local_step = None
+      else:
+        self._local_step = self._global_step+0
+        local_vars_assign.append(self._local_step)
 
     with ops.control_dependencies(local_vars_assign):
       loss = gen_array_ops.identity(loss)
@@ -168,6 +181,50 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
                                             "z2", self._name)
       self._zeros_slot(v, "g", self._name)
 
+  def apply_gradients(self, grads_and_vars, global_step=None, name=None):
+    """Apply gradients to variables.
+
+    This contains most of the synchronization implementation and also wraps the
+    apply_gradients() from the real optimizer.
+
+    Args:
+      grads_and_vars: List of (gradient, variable) pairs as returned by
+        compute_gradients().
+      global_step: Optional Variable to increment by one after the
+        variables have been updated.
+      name: Optional name for the returned operation.  Default to the
+        name passed to the Optimizer constructor.
+
+    Returns:
+      train_op: The op to dequeue a token so the replicas can exit this batch
+      and start the next one. This is executed by each replica.
+
+    Raises:
+      ValueError: If the grads_and_vars is empty.
+      ValueError: If global step is not provided, the staleness cannot be
+        checked.
+    """
+
+    if not grads_and_vars:
+      raise ValueError("Must supply at least one variable")
+    grads = [g for g, v in grads_and_vars]
+    var_list = [v for g, v in grads_and_vars]
+
+    if self._global_step is not None:
+      global_step = self._global_step
+
+    with ops.name_scope("gradient_compensation", self._name) as name:
+      train_op = super(AdaptiveRevisionOptimizer, self).apply_gradients(grads_and_vars, global_step=global_step, name=name)
+
+    if global_step is not None and self._local_step is not None:
+      with ops.control_dependencies(grads), ops.colocate_with(global_step):
+        staleness = gen_array_ops.reshape(gen_array_ops.identity(global_step) - self._local_step, shape=())
+        summary.scalar("Gradient staleness", staleness)
+
+      return control_flow_ops.group(*[train_op, staleness])
+    else:
+      return train_op
+
   def _prepare(self):
     self._learning_rate_tensor = ops.convert_to_tensor(self._learning_rate,
                                                        name="learning_rate")
@@ -177,6 +234,10 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       g = self.get_slot(var, "g")
       z = self.get_slot(var, "z")
       z2 = self.get_slot(var, "z2")
+      summary.histogram(var.name+'_g', g)
+      summary.histogram(var.name+'_z', z)
+      summary.histogram(var.name+'_z2', z2)
+      summary.histogram(var.name, var)
       z2_val = gen_array_ops.identity(z2)
       z_val = gen_array_ops.identity(z)
       g_val = gen_array_ops.identity(g)
@@ -186,6 +247,8 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
         g_bck = g_val - old_g_val
       else:
         g_bck = array_ops.zeros_like(g_val)
+
+      summary.histogram(var.name+'_g_bck', g_bck)
 
       lr_old = self._learning_rate_tensor / math_ops.sqrt(z2_val)
       z_delta = math_ops.multiply(grad, grad) + 2 * math_ops.multiply(grad, g_bck)
