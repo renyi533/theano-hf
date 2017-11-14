@@ -28,7 +28,7 @@ import sys
 import tensorflow as tf
 from hessian_free import HessianFreeOptimizer
 from dc_asgd_optimizer import DCAsgdOptimizer
-
+from adaptive_revision import AdaptiveRevisionOptimizer
 FLAGS = None
 
 
@@ -60,14 +60,17 @@ def main(_):
   elif FLAGS.method == 'Adagrad':
     optimizer = tf.train.AdagradOptimizer(FLAGS.learning_rate)
     print('Adagrad')
-  else:
+  elif FLAGS.method == 'Adam':
     optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
     print('Adam')
+  else:
+    optimizer = AdaptiveRevisionOptimizer(FLAGS.learning_rate, delay_tolerant=True)
+    print('AdaptiveRevision')
 
   sess = tf.InteractiveSession()
   global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
   #tf.train.global_step(sess, global_step_tensor)
-  optimizer = DCAsgdOptimizer(optimizer, lambda_val=0.01, ps_comp=True, rescale_variance = False, momentum = 0.0, global_step=global_step_tensor)
+  #optimizer = DCAsgdOptimizer(optimizer, lambda_val=0.01, ps_comp=True, rescale_variance = False, momentum = 0.0, global_step=global_step_tensor)
   train_step = optimizer.minimize(cross_entropy, global_step=global_step_tensor)
 
   correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
