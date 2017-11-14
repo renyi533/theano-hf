@@ -51,6 +51,7 @@ def main(_):
   # Define loss and optimizer
   y_ = tf.placeholder(tf.float32, [None, 2])
 
+  global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
   cross_entropy = tf.reduce_mean(
       tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y))
   tf.summary.scalar('cross_entropy', cross_entropy)
@@ -64,11 +65,10 @@ def main(_):
     optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
     print('Adam')
   else:
-    optimizer = AdaptiveRevisionOptimizer(FLAGS.learning_rate, delay_tolerant=True)
+    optimizer = AdaptiveRevisionOptimizer(FLAGS.learning_rate, delay_tolerant=True, global_step=global_step_tensor)
     print('AdaptiveRevision')
 
   sess = tf.InteractiveSession()
-  global_step_tensor = tf.Variable(0, trainable=False, name='global_step')
   #tf.train.global_step(sess, global_step_tensor)
   #optimizer = DCAsgdOptimizer(optimizer, lambda_val=0.01, ps_comp=True, rescale_variance = False, momentum = 0.0, global_step=global_step_tensor)
   train_step = optimizer.minimize(cross_entropy, global_step=global_step_tensor)
