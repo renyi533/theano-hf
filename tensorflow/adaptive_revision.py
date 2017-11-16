@@ -237,6 +237,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       summary.histogram(var.name+'_g', g)
       summary.histogram(var.name+'_z', z)
       summary.histogram(var.name+'_z2', z2)
+      summary.histogram(var.name+'_grad', grad)
       summary.histogram(var.name, var)
       z2_val = gen_array_ops.identity(z2)
       z_val = gen_array_ops.identity(z)

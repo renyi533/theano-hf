@@ -66,11 +66,12 @@ class DCAsgdOptimizer(optimizer.Optimizer):
   def __init__(self,
                opt,
                lambda_val,
-               local_idx=-1,
+               local_idx,
                rescale_variance = True,
                momentum = 0.95,
                epsilon = 1e-7,
                ps_comp = True,
+               worker_cnt = -1,
                global_step=None,
                use_locking=False,
                name="DCAsgdOptimizer"):
@@ -87,6 +88,9 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     self._momentum = momentum
     self._epsilon = epsilon
     self._rescale_variance = rescale_variance
+    self._worker_cnt = worker_cnt
+    assert local_idx >= 0
+
 
   def compute_gradients(self, loss, var_list=None,
                         gate_gradients=optimizer.Optimizer.GATE_OP,
@@ -110,7 +114,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     """
     if var_list is None:
       var_list = ops.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES)
-
+    self._create_slots(var_list)
     local_vars_assign = self.allocate_local_vars(var_list)
 
     with ops.colocate_with(loss):
@@ -145,7 +149,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     return list(zip(valid_grads, vars_with_grad))
 
   def allocate_local_vars(self, var_list):
-    if self._local_idx < 0:
+    if self._worker_cnt > 0:
       return self.get_var_local_copies(var_list)
     else:
       with ops.device("/job:worker/task:%d" % self._local_idx):
@@ -157,13 +161,19 @@ class DCAsgdOptimizer(optimizer.Optimizer):
       var_list = ops.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES)
     with ops.name_scope("local_var_copies", self._name) as name:
       for v in var_list:
-        local_var = variables.Variable(
+        if self._worker_cnt <= 0:
+          local_var = variables.Variable(
                         array_ops.zeros(v.get_shape(),dtype=v.dtype),
                         trainable=False,
                         collections=[ops.GraphKeys.LOCAL_VARIABLES],
                         #dtype=v.dtype,
                         name="dc_asgd_local_var")
-        assign_op = state_ops.assign(local_var, v)
+        else:
+          local_var = self.get_slot(v, "var_copy_%d" % (self._local_idx))
+
+        with ops.colocate_with(local_var):
+          assign_op = state_ops.assign(local_var, v)
+
         self._local_vars.append(local_var)
         local_vars_assign.append(assign_op)
         self._var_local_var_maps[v] = local_var
@@ -218,8 +228,6 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     def _comp_grad_ps():
       new_grads_ps = []
       var_diff_array = []
-      if self._rescale_variance and (self._momentum > 0.0):
-        self._create_slots(var_list)
 
       with ops.name_scope("gradient_compensation_ps", self._name) as name:
         for g,v in grads_and_vars:
@@ -276,18 +284,23 @@ class DCAsgdOptimizer(optimizer.Optimizer):
   def _create_slots(self, var_list):
     for v in var_list:
       with ops.colocate_with(v):
-        dtype = v.dtype.base_dtype
-        if v.get_shape().is_fully_defined():
-          init = init_ops.constant_initializer(0.0,
+        for i in range(self._worker_cnt):
+          self._zeros_slot(v, "var_copy_%d" % (i), self._name)
+
+        if self._rescale_variance and (self._momentum > 0.0):
+          dtype = v.dtype.base_dtype
+          if v.get_shape().is_fully_defined():
+            init = init_ops.constant_initializer(0.0,
                                                dtype=dtype)
-        else:
-          # Use a Tensor instead of initializer if variable does not have static
-          # shape.
-          init_constant = gen_array_ops.fill(array_ops.shape(v),
+          else:
+            # Use a Tensor instead of initializer if variable does not have static
+            # shape.
+            init_constant = gen_array_ops.fill(array_ops.shape(v),
                                              0.0)
-          init = math_ops.cast(init_constant, dtype)
-      self._get_or_make_slot_with_initializer(v, init, v.get_shape(), dtype,
+            init = math_ops.cast(init_constant, dtype)
+          self._get_or_make_slot_with_initializer(v, init, v.get_shape(), dtype,
                                               "dc_asgd_accumulator", self._name)
+
 
   def get_slot(self, *args, **kwargs):
     """Return a slot named "name" created for "var" by the Optimizer.
