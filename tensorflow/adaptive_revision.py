@@ -246,11 +246,14 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
 
       if self._delay_tolerant:
         g_bck = g_val - old_g_val
+        g_bck_dot = math_ops.sqrt(math_ops.reduce_sum(g_bck * g_bck))
+        grad_dot = math_ops.sqrt(math_ops.reduce_sum(grad * grad))
+        correlation = math_ops.reduce_sum(grad * g_bck) / (g_bck_dot * grad_dot + 1e-15)
+        summary.scalar("Gradient correlation", correlation)
       else:
         g_bck = array_ops.zeros_like(g_val)
 
       summary.histogram(var.name+'_g_bck', g_bck)
-
       lr_old = self._learning_rate_tensor / math_ops.sqrt(z2_val)
       z_delta = math_ops.multiply(grad, grad) + 2 * math_ops.multiply(grad, g_bck)
       new_z = z_val + z_delta
