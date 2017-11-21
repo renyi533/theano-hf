@@ -51,7 +51,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
   """
 
   def __init__(self, learning_rate, initial_accumulator_value=0.1, local_idx=-1,
-               delay_tolerant = True, global_step = None,
+               delay_tolerant = True, global_step = None, max_delta_ratio = 1.0,
                use_locking=False, name="AdaptiveRevision"):
     """Construct a new AdaptiveRevision optimizer.
 
@@ -79,6 +79,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
     self._local_idx = local_idx
     self._delay_tolerant = delay_tolerant
     self._global_step=global_step
+    self._max_delta_ratio = max_delta_ratio
 
   def compute_gradients(self, loss, var_list=None,
                         gate_gradients=optimizer.Optimizer.GATE_OP,
@@ -228,6 +229,8 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
   def _prepare(self):
     self._learning_rate_tensor = ops.convert_to_tensor(self._learning_rate,
                                                        name="learning_rate")
+    self._max_delta_ratio_tensor = ops.convert_to_tensor(self._max_delta_ratio,
+                                                       name="max_delta_ratio")
 
   def _apply_dense(self, grad, var):
     with ops.colocate_with(var), ops.control_dependencies([grad]):
@@ -248,8 +251,13 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
         g_bck = g_val - old_g_val
         g_bck_dot = math_ops.sqrt(math_ops.reduce_sum(g_bck * g_bck))
         grad_dot = math_ops.sqrt(math_ops.reduce_sum(grad * grad))
-        correlation = math_ops.reduce_sum(grad * g_bck) / (g_bck_dot * grad_dot + 1e-15)
+        denominator = g_bck_dot * grad_dot
+        correlation = control_flow_ops.cond(denominator > 0,
+                lambda: math_ops.reduce_sum(grad * g_bck) / denominator,
+                lambda: ops.convert_to_tensor(0.0))
         summary.scalar("Gradient correlation", correlation)
+        summary.scalar("g_bck_dot", g_bck_dot)
+        summary.scalar("grad_dot", grad_dot)
       else:
         g_bck = array_ops.zeros_like(g_val)
 
@@ -259,7 +267,18 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       new_z = z_val + z_delta
       new_z2 = gen_math_ops.maximum(new_z, z2_val)
       lr_new = self._learning_rate_tensor / math_ops.sqrt(new_z2)
-      delta = (-lr_new * grad) + (lr_old - lr_new) * g_bck
+      delta1 = (-lr_new * grad)
+      delta2 = (lr_old - lr_new) * g_bck
+      delta1_dot = math_ops.sqrt(math_ops.reduce_sum(delta1 * delta1))
+      delta2_dot = math_ops.sqrt(math_ops.reduce_sum(delta2 * delta2))
+      summary.scalar("delta1_dot", delta1_dot)
+      summary.scalar("delta2_dot", delta2_dot)
+      delta_ratio = delta2_dot / delta1_dot
+      summary.scalar("delta_ratio", delta_ratio)
+      delta2 = control_flow_ops.cond(delta_ratio > self._max_delta_ratio_tensor,
+                    lambda: delta2 * self._max_delta_ratio_tensor / delta_ratio,
+                    lambda: delta2)
+      delta = delta1 + delta2
       v_update = state_ops.assign_add(var, delta, use_locking=self._use_locking)
       with ops.control_dependencies([v_update]):
         g_update = state_ops.assign_add(g, grad, use_locking=self._use_locking)
