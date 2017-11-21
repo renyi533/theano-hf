@@ -73,6 +73,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
                ps_comp = True,
                worker_cnt = -1,
                global_step=None,
+               max_comp_ratio = 1e5,
                use_locking=False,
                name="DCAsgdOptimizer"):
 
@@ -89,6 +90,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     self._epsilon = epsilon
     self._rescale_variance = rescale_variance
     self._worker_cnt = worker_cnt
+    self._max_comp_ratio = max_comp_ratio
     assert local_idx >= 0
 
 
@@ -265,7 +267,25 @@ class DCAsgdOptimizer(optimizer.Optimizer):
       for v, diff in zip(var_list, var_diff_array):
         summary.histogram(v.name+'_delta', diff)
         summary.histogram(v.name, v)
-      comp_grads_and_vars = list(zip(new_grads, var_list))
+
+      final_grads = []
+      grads_zip = list(zip(new_grads, grads, var_list))
+
+      for new_g, g, v in grads_zip:
+        with ops.colocate_with(new_g):
+          comp_delta = new_g - g
+          delta_dot = math_ops.sqrt(math_ops.reduce_sum(comp_delta * comp_delta))
+          g_dot = math_ops.sqrt(math_ops.reduce_sum(g * g))
+          delta_ratio = delta_dot/g_dot
+          summary.scalar(v.name+'_g_dot', g_dot)
+          summary.scalar(v.name+'_delta_dot', delta_dot)
+          summary.scalar(v.name+'_delta_ratio', delta_ratio)
+          final_g = control_flow_ops.cond(delta_ratio > self._max_comp_ratio,
+                        lambda: g + comp_delta * self._max_comp_ratio / delta_ratio,
+                        lambda: new_g)
+          final_grads.append(final_g)
+
+      comp_grads_and_vars = list(zip(final_grads, var_list))
 
       train_op = self._opt.apply_gradients(comp_grads_and_vars, global_step=global_step, name=name)
 
