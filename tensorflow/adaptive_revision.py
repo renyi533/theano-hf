@@ -266,6 +266,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       z_delta = math_ops.multiply(grad, grad) + 2 * math_ops.multiply(grad, g_bck)
       new_z = z_val + z_delta
       new_z2 = gen_math_ops.maximum(new_z, z2_val)
+      z2_delta = new_z2 - z2_val
       lr_new = self._learning_rate_tensor / math_ops.sqrt(new_z2)
       delta1 = (-lr_new * grad)
       delta2 = (lr_old - lr_new) * g_bck
@@ -283,7 +284,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       with ops.control_dependencies([v_update]):
         g_update = state_ops.assign_add(g, grad, use_locking=self._use_locking)
         z_update = state_ops.assign_add(z, z_delta, use_locking=self._use_locking)
-        z2_update = state_ops.assign(z2, new_z2, use_locking=self._use_locking)
+        z2_update = state_ops.assign_add(z2, z2_delta, use_locking=self._use_locking)
 
         return control_flow_ops.group(*[g_update, z_update, z2_update])
 
