@@ -40,7 +40,7 @@ from tensorflow.python.training import training_util
 from tensorflow.python.summary import summary
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import gradients
-
+from tensorflow.python.ops import gen_control_flow_ops
 
 class AdaptiveRevisionOptimizer(optimizer.Optimizer):
   """Optimizer that implements the AdaptiveRevision algorithm.
@@ -52,7 +52,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
 
   def __init__(self, learning_rate, initial_accumulator_value=0.1, local_idx=-1,
                delay_tolerant = True, global_step = None, max_delta_ratio = 1.0,
-               use_locking=False, name="AdaptiveRevision"):
+               corr_smooth=0.99, use_locking=False, name="AdaptiveRevision"):
     """Construct a new AdaptiveRevision optimizer.
 
     Args:
@@ -80,6 +80,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
     self._delay_tolerant = delay_tolerant
     self._global_step=global_step
     self._max_delta_ratio = max_delta_ratio
+    self._corr_smooth = corr_smooth
 
   def compute_gradients(self, loss, var_list=None,
                         gate_gradients=optimizer.Optimizer.GATE_OP,
@@ -247,6 +248,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       g_val = gen_array_ops.identity(g)
       old_g_val = gen_array_ops.identity(self._var_local_var_maps[var])
 
+      corr_assign = gen_control_flow_ops.no_op()
       if self._delay_tolerant:
         g_bck = g_val - old_g_val
         g_bck_dot = math_ops.sqrt(math_ops.reduce_sum(g_bck * g_bck))
@@ -255,7 +257,11 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
         correlation = control_flow_ops.cond(denominator > 0,
                 lambda: math_ops.reduce_sum(grad * g_bck) / denominator,
                 lambda: ops.convert_to_tensor(0.0))
+        correlation_var = variables.Variable(0.0, trainable=False)
+        smoothed_correlation = correlation_var * self._corr_smooth + correlation * (1 - self._corr_smooth)
+        corr_assign = state_ops.assign(correlation_var, smoothed_correlation)
         summary.scalar("Gradient correlation", correlation)
+        summary.scalar("Gradient smoothed correlation", smoothed_correlation)
         summary.scalar("g_bck_dot", g_bck_dot)
         summary.scalar("grad_dot", grad_dot)
       else:
@@ -281,7 +287,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
                     lambda: delta2)
       delta = delta1 + delta2
       v_update = state_ops.assign_add(var, delta, use_locking=self._use_locking)
-      with ops.control_dependencies([v_update]):
+      with ops.control_dependencies([v_update, corr_assign]):
         g_update = state_ops.assign_add(g, grad, use_locking=self._use_locking)
         z_update = state_ops.assign_add(z, z_delta, use_locking=self._use_locking)
         z2_update = state_ops.assign_add(z2, z2_delta, use_locking=self._use_locking)
