@@ -216,11 +216,12 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     def _comp_grad_worker():
       new_grads_worker = []
       var_diff_array = []
-      with ops.name_scope("gradient_compensation_worker", self._name) as name, ops.control_dependencies(grads):
+      with ops.name_scope("gradient_compensation_worker", self._name) as name:
         for g,v in grads_and_vars:
           assert v in self._var_local_var_maps
-          var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
-          var_diff_array.append(var_diff)
+          with ops.device(v.device), ops.control_dependencies([g]):
+            var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
+            var_diff_array.append(var_diff)
         Hv = _hessian_vector_product(self._loss, var_list, var_diff_array, grads=grads)
 
         for g, delta in zip(grads, Hv):
