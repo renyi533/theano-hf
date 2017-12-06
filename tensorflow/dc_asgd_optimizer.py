@@ -219,8 +219,8 @@ class DCAsgdOptimizer(optimizer.Optimizer):
       with ops.name_scope("gradient_compensation_worker", self._name) as name:
         for g,v in grads_and_vars:
           assert v in self._var_local_var_maps
-          with ops.device(v.device), ops.control_dependencies([g]):
-            var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
+          with ops.device(g.device), ops.control_dependencies([g]):
+            var_diff = math_ops.subtract(v.read_value(), self._var_local_var_maps[v].read_value())
             var_diff_array.append(var_diff)
         Hv = _hessian_vector_product(self._loss, var_list, var_diff_array, grads=grads)
 
@@ -236,7 +236,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
         for g,v in grads_and_vars:
           assert v in self._var_local_var_maps
           with ops.device(v.device), ops.control_dependencies([g]):
-            var_diff = math_ops.subtract(gen_array_ops.identity(v), gen_array_ops.identity(self._var_local_var_maps[v]))
+            var_diff = math_ops.subtract(v.read_value(), self._var_local_var_maps[v].read_value())
             var_diff_array.append(var_diff)
             g_dot_g = math_ops.multiply(g, g)
             delta = math_ops.multiply(var_diff, g_dot_g)

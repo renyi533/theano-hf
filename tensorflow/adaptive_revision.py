@@ -243,10 +243,10 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       summary.histogram(var.name+'_z2', z2)
       summary.histogram(var.name+'_grad', grad)
       summary.histogram(var.name, var)
-      z2_val = gen_array_ops.identity(z2)
-      z_val = gen_array_ops.identity(z)
-      g_val = gen_array_ops.identity(g)
-      old_g_val = gen_array_ops.identity(self._var_local_var_maps[var])
+      z2_val = z2.read_value()
+      z_val = z.read_value()
+      g_val = g.read_value()
+      old_g_val = self._var_local_var_maps[var].read_value()
 
       corr_assign = gen_control_flow_ops.no_op()
       if self._delay_tolerant:
