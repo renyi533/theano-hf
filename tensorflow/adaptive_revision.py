@@ -158,7 +158,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
                         #dtype=v.dtype,
                         name="local_var")
         curr_g = self._zeros_slot(v, 'g', self._name)
-        assign_op = state_ops.assign(local_var, curr_g)
+        assign_op = state_ops.assign(local_var, curr_g.read_value())
         self._local_vars.append(local_var)
         local_vars_assign.append(assign_op)
         self._var_local_var_maps[v] = local_var
