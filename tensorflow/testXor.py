@@ -64,6 +64,10 @@ def main(_):
   elif FLAGS.method == 'Adam':
     optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
     print('Adam')
+  elif FLAGS.method == 'HessianFree':
+    optimizer = HessianFreeOptimizer(cg_iter=FLAGS.cg_iter, learning_rate=FLAGS.learning_rate, damping=FLAGS.damping, hv_method=FLAGS.hv_method, use_sgd=False, fix_first_step=False)
+    train_step = optimizer.minimize(loss=cross_entropy, z=y)
+    print('HessianFree')
   else:
     optimizer = AdaptiveRevisionOptimizer(FLAGS.learning_rate, delay_tolerant=True, global_step=global_step_tensor)
     print('AdaptiveRevision')

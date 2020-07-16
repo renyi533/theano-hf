@@ -151,7 +151,7 @@ class AdaptiveRevisionOptimizer(optimizer.Optimizer):
       var_list = ops.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES)
     with ops.name_scope("local_var_copies", self._name) as name:
       for v in var_list:
-        local_var = variables.Variable(
+        local_var = variables.VariableV1(
                         array_ops.zeros(v.get_shape(),dtype=v.dtype),
                         trainable=False,
                         collections=[ops.GraphKeys.LOCAL_VARIABLES],

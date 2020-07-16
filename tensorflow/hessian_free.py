@@ -3,7 +3,6 @@ from __future__ import division
 from __future__ import print_function
 
 from tensorflow.python.framework import ops
-from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import gen_math_ops
 from tensorflow.python.ops import array_ops
@@ -21,7 +20,6 @@ from tensorflow.python.training import slot_creator
 from tensorflow.python.ops import tensor_array_ops
 #from tensorflow_forward_ad.second_order import hessian_vec_fw
 #from tensorflow_forward_ad.second_order import gauss_newton_vec
-import tensorflow as tf
 
 def _Lop(f, x, v):
   assert not isinstance(f, list) or isinstance(v, list), "f and v should be of the same type"
@@ -62,32 +60,6 @@ def _gauss_newton_vec(ys, zs, xs, vs):
 
   jhjv = gradients.gradients(zs, xs, hjv, gate_gradients=True)
   return jhjv, hjv
-
-
-def _gauss_newton_vec_2(ys, zs, xs, vs):
-  """Implements Gauss-Newton vector product.
-  Args:
-    ys: Loss function.
-    zs: Before output layer (input to softmax).
-    xs: Weights, list of tensors.
-    vs: List of perturbation vector for each weight tensor.
-  Returns:
-    J'HJv: Guass-Newton vector product.
-  """
-  # Validate the input
-  if type(xs) == list:
-    if len(vs) != len(xs):
-      raise ValueError("xs and vs must have the same length.")
-
-  grads_z = gradients.gradients(ys, zs, gate_gradients=True)
-
-  Jv = _Rop(zs, xs, vs)
-
-  HJv = _Rop(grads_z, zs, Jv)
-
-  Gv = gradients.gradients(zs, xs, HJv, gate_gradients=True)
-
-  return Gv, HJv
 
 def _hessian_vector_product(ys, xs, v):
   """Multiply the Hessian of `ys` wrt `xs` by `v`.
@@ -138,26 +110,16 @@ def _dot(t0, t1):
 
 def Hv( loss, z, variables, v, damping):
   Hvs = _hessian_vector_product(loss, variables, v)
-  for k in range(len(Hvs)):
-    Hvs[k] = Hvs[k] + damping * v[k]
+  if damping > 0:
+    for k in range(len(Hvs)):
+      Hvs[k] = Hvs[k] + damping * v[k]
   return Hvs
 
 def Gv( loss, z, variables, v, damping):
   Gvs = _gauss_newton_vec(loss, z, variables, v)[0]
-  for k in range(len(Gvs)):
-    Gvs[k] = Gvs[k] + damping * v[k]
-  return Gvs
-
-def Gv2( loss, z, variables, v, damping):
-  Gvs = _gauss_newton_vec_2(loss, z, variables, v)[0]
-  for k in range(len(Gvs)):
-    Gvs[k] = Gvs[k] + damping * v[k]
-  return Gvs
-
-def Kv( loss, z, variables, v, damping):
-  Gvs = [array_ops.zeros_like(g) for g in v]
-  for k in range(len(Gvs)):
-    Gvs[k] = Gvs[k] + damping * v[k]
+  if damping > 0:
+    for k in range(len(Gvs)):
+      Gvs[k] = Gvs[k] + damping * v[k]
   return Gvs
 
 class HessianFreeOptimizer(optimizer.Optimizer):
@@ -166,45 +128,35 @@ class HessianFreeOptimizer(optimizer.Optimizer):
   GATE_NONE = 0
   GATE_OP = 1
   GATE_GRAPH = 2
-  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False,
-          hv_method = 0, init_decay=0.0, cg_init_ratio=1.0, auto_switch=True,
-          use_locking=False, name="HessianFree"):
+  def __init__(self, cg_iter, learning_rate=1.0, damping=1.0, fix_first_step=False, hv_method = 0, use_sgd=False, use_locking=False, name="HessianFree"):
     """Construct a new gradient descent optimizer.
     Args:
       learning_rate: A Tensor or a floating point value.  The learning
         rate to use.
       use_locking: If True use locks for update operations.
       name: Optional name prefix for the operations created when applying
-        gradients. Defaults to "HessianFree".
+        gradients. Defaults to "GradientDescent".
     """
     super(HessianFreeOptimizer, self).__init__(use_locking, name)
     self._cg_iter = cg_iter
-    self._learning_rate = ops.convert_to_tensor(learning_rate)
-    self._damping = ops.convert_to_tensor(damping)
+    self._learning_rate = learning_rate
+    self._damping = damping
     self._fix_first_step = fix_first_step
+    self._use_sgd = use_sgd
     self._Hv = Hv
-    self._init_decay = init_decay
-    self._cg_init_ratio = cg_init_ratio
-    self._auto_switch = auto_switch
     if hv_method == 0:
       self._Hv = Gv
-    elif hv_method == 1:
-      self._Hv = Hv
-    elif hv_method == 2:
-      self._Hv = Gv2
-    else:
-      self._Hv = Kv
 
   def _apply_dense(self, grad, var):
     return training_ops.apply_gradient_descent(
         var,
-        math_ops.cast(1.0, var.dtype.base_dtype),
+        math_ops.cast(self._learning_rate_tensor, var.dtype.base_dtype),
         -grad,
         use_locking=self._use_locking).op
 
   def _resource_apply_dense(self, grad, handle):
     return training_ops.resource_apply_gradient_descent(
-        handle.handle, math_ops.cast(1.0,
+        handle.handle, math_ops.cast(self._learning_rate_tensor,
                                      grad.dtype.base_dtype),
         -grad, use_locking=self._use_locking)
 
@@ -257,41 +209,33 @@ class HessianFreeOptimizer(optimizer.Optimizer):
           " that do not support gradients, between variables %s and loss %s." %
           ([str(v) for _, v in grads_and_vars], loss))
 
-    init_deltas = [self._zeros_slot(v, 'init_deltas', self._name) for v in vars_with_grad] if self._init_decay > 0 else None
-
     valid_grads = [-g for g, v in grads_and_vars if g is not None]
 
     valid_vars_with_grad = list(zip(valid_grads, vars_with_grad))
 
-    slot_update = []
-    valid_vars_with_grad, deltas_history, residuals_history = \
-      self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step, init_deltas, self._damping, self._learning_rate)
+    if not self._use_sgd:
+      valid_vars_with_grad, deltas_history, residuals_history = self._conjugate_gradient(loss, z, valid_vars_with_grad, self._cg_iter, self._fix_first_step)
 
-    if self._init_decay > 0:
-      slot_update = [self._get_or_make_slot(v, g, 'init_deltas', self._name).assign(self._init_decay*g) for g,v in valid_vars_with_grad]
-
-    with ops.control_dependencies(slot_update):
-      train_op = self.apply_gradients(valid_vars_with_grad, global_step=global_step,
+    return self.apply_gradients(valid_vars_with_grad, global_step=global_step,
                                 name=name)
-    return train_op
 
-  def _conjugate_gradient(self, loss, z, grads_and_vars, cg_iter, fix_first_step=False, init_deltas=None, damping=1.0, learning_rate=1.0):
+  def _conjugate_gradient(self, loss, z, grads_and_vars, cg_iter, fix_first_step=False, init_deltas=None):
     minus_gradient = [g for g,v in grads_and_vars]
     variables = [v for g,v in grads_and_vars]
 
     H_vars = [array_ops.zeros_like(g) for g in minus_gradient]
     if init_deltas is not None:
-      H_vars = self._Hv(loss, z, variables, init_deltas, damping)
+      H_vars = self._Hv(loss, z, variables, init_deltas, self._damping)
 
-    curr_dirs = [g - self._cg_init_ratio * b for g,b in list(zip(minus_gradient, H_vars))]
-    curr_residuals = [g - self._cg_init_ratio * b for g,b in list(zip(minus_gradient, H_vars))]
-    deltas = init_deltas if init_deltas is not None else [ array_ops.zeros_like(g) for g in curr_dirs ]
+    curr_dirs = [g - b for g,b in list(zip(minus_gradient, H_vars))]
+    curr_residuals = [g - b for g,b in list(zip(minus_gradient, H_vars))]
+    deltas = [ array_ops.zeros_like(g) for g in curr_dirs ]
 
     deltas_history = []
     residuals_history = []
     first_alpha = 1
     for i in range(cg_iter):
-      Hvs = self._Hv(loss, z, variables, curr_dirs, damping)
+      Hvs = self._Hv(loss, z, variables, curr_dirs, self._damping)
 
       if len(Hvs) != len(variables):
         raise ValueError("xs and Hvs must have the same length.")
@@ -307,7 +251,7 @@ class HessianFreeOptimizer(optimizer.Optimizer):
       alpha = control_flow_ops.cond(gen_math_ops.is_finite(alpha), lambda: gen_math_ops.maximum(alpha, 1e-6), lambda : ops.convert_to_tensor(1.0))
       if i == 0 and fix_first_step:
         first_alpha = alpha
-      curr_deltas = [d * (alpha / first_alpha) * learning_rate for d in curr_dirs]
+      curr_deltas = [d * (alpha / first_alpha) for d in curr_dirs]
       deltas = [ d1 + d0 for d0,d1 in list(zip(curr_deltas, deltas)) ]
       deltas_history.append(curr_deltas)
       residuals_history.append(curr_residuals)
@@ -323,34 +267,4 @@ class HessianFreeOptimizer(optimizer.Optimizer):
       curr_dirs = new_dirs
       curr_residuals = new_residuals
 
-    if self._auto_switch:
-      minus_gradient_flatten = [gen_array_ops.reshape(v, [-1]) for v in minus_gradient]
-      minus_gradient_concat = array_ops.concat(minus_gradient_flatten, 0)
-
-      deltas_flatten = [gen_array_ops.reshape(v, [-1]) for v in deltas]
-      deltas_concat = array_ops.concat(deltas_flatten, 0)
-
-      G_deltas = self._Hv(loss, z, variables, deltas, 0)
-
-      G_deltas_flatten = [gen_array_ops.reshape(v, [-1]) for v in G_deltas]
-      G_deltas_concat = array_ops.concat(G_deltas_flatten, 0)
-      improve_pred = _dot(deltas_concat, minus_gradient_concat-0.5*G_deltas_concat)
-
-      gradient_delta = [g*learning_rate for g,v in grads_and_vars]
-      gradient_delta_flatten = [gen_array_ops.reshape(v, [-1]) for v in gradient_delta]
-      gradient_delta_concat = array_ops.concat(gradient_delta_flatten, 0)
-
-      G_gradient_delta = self._Hv(loss, z, variables, gradient_delta, 0)
-
-      G_gradient_delta_flatten = [gen_array_ops.reshape(v, [-1]) for v in G_gradient_delta]
-      G_gradient_delta_concat = array_ops.concat(G_gradient_delta_flatten, 0)
-
-      g_improve_pred = _dot(gradient_delta_concat, minus_gradient_concat-0.5*G_gradient_delta_concat)
-
-      deltas = control_flow_ops.cond(g_improve_pred > improve_pred, lambda: gradient_delta, lambda: deltas)
-
-      tf.summary.scalar('g_improve_pred', g_improve_pred)
-      tf.summary.scalar('improve_pred', improve_pred)
-
     return list(zip(deltas, variables)), deltas_history, residuals_history
-

@@ -164,7 +164,7 @@ class DCAsgdOptimizer(optimizer.Optimizer):
     with ops.name_scope("local_var_copies", self._name) as name:
       for v in var_list:
         if self._worker_cnt <= 0:
-          local_var = variables.Variable(
+          local_var = variables.VariableV1(
                         array_ops.zeros(v.get_shape(),dtype=v.dtype),
                         trainable=False,
                         collections=[ops.GraphKeys.LOCAL_VARIABLES],
